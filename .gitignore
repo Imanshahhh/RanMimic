@@ -1,0 +1,10 @@
+sandbox/*
+!sandbox/.gitkeep
+output/*
+!output/.gitkeep
+.env
+__pycache__/
+*.pyc
+*.bin
+venv/
+.vscode/
