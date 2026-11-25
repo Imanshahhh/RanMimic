@@ -74,8 +74,8 @@ def _risk_band(total: float) -> str:
 
 
 def score_session(
-    files_before: list[Path],
-    files_after: list[Path],
+    before_snapshots: dict,
+    after_snapshots: dict,
     renamed_files: list[dict],
     note_dropped: bool,
     files_per_sec: float,
@@ -85,20 +85,20 @@ def score_session(
     Main scoring entry point. Takes raw observable signals (not the mode
     that produced them) and returns a weighted breakdown.
 
-    files_before / files_after: matched pairs analyzed via entropy.analyze_file()
+    before_snapshots / after_snapshots: {Path: entropy.analyze_file() result}
+    dicts produced by simulator.run() — precomputed, not re-read from disk.
     renamed_files: from simulator's run_log results
     """
     entropy_deltas = []
     chi_square_shifts = []
 
-    for before_path, after_path in zip(files_before, files_after):
-        before = entropy.analyze_file(before_path)
-        after = entropy.analyze_file(after_path)
+    for path, before in before_snapshots.items():
+        after = after_snapshots.get(path, {"entropy": None, "chi_square": None})
         delta = entropy.compute_delta(before, after)
 
-        if delta["entropy_delta"] is not None:
+        if delta["entropy_delta"] is not None and abs(delta["entropy_delta"]) > 0.01:
             entropy_deltas.append(delta["entropy_delta"])
-        if delta["p_value_shift"] is not None:
+        if delta["p_value_shift"] is not None and abs(delta["p_value_shift"]) > 0.0001:
             chi_square_shifts.append(delta["p_value_shift"])
 
     mean_entropy_delta = sum(entropy_deltas) / len(entropy_deltas) if entropy_deltas else 0.0
