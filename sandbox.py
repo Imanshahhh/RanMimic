@@ -30,10 +30,23 @@ def _random_text(length: int) -> bytes:
 
 
 def _random_bytes(length: int) -> bytes:
-    return os.urandom(length)
+    """
+    Simulates realistic binary file content (docx/jpg/pdf) with moderate
+    entropy (~6.5-7.0 bits/byte) rather than pure random noise (~8.0),
+    since real compressed/structured binary files are not maximally random.
+    """
+    chunk = os.urandom(64)  # a repeating "structure" pattern
+    repeats = (length // len(chunk)) + 1
+    structured = (chunk * repeats)[:length]
+    # mix in some genuine randomness so it's not perfectly repetitive either
+    noise_portion = os.urandom(length // 4)
+    result = bytearray(structured)
+    for i, b in enumerate(noise_portion):
+        result[i] = b
+    return bytes(result)
 
 
-def prepare(target: Path, file_count: int = DEFAULT_FILE_COUNT) -> list[Path]:
+def prepare(target: Path, file_count: int = DEFAULT_FILE_COUNT, seed: int = None) -> list[Path]:
     """
     Create the sandbox directory (if needed) and populate it with dummy
     victim files of varied types. Returns the list of created file paths.
@@ -44,6 +57,9 @@ def prepare(target: Path, file_count: int = DEFAULT_FILE_COUNT) -> list[Path]:
     """
     target.mkdir(parents=True, exist_ok=True)
 
+    if seed is not None:
+        random.seed(seed)
+
     existing = [f for f in target.iterdir() if f.is_file()]
     if existing and SESSION_STATE_FILE.exists():
         raise RuntimeError(
@@ -51,6 +67,10 @@ def prepare(target: Path, file_count: int = DEFAULT_FILE_COUNT) -> list[Path]:
             f"({len(existing)} files found, session_state.json present). "
             f"Run 'python main.py --restore' first before starting a new session."
         )
+    # Clear any leftover files from a prior (already-restored) session
+    # before generating a fresh set — prevents silent accumulation across runs.
+    for f in existing:
+        f.unlink()
 
     created = []
     for i in range(file_count):
