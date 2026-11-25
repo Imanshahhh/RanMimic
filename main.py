@@ -121,8 +121,15 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Restore files from a previous run using your recovery password.",
     )
-    return parser
 
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Random seed for reproducible test runs (e.g. --seed 42). Omit for real randomness.",
+    )
+
+    return parser
 
 def main():
     parser = build_parser()
@@ -158,7 +165,7 @@ def main():
     run_log = ranmimic_logger.start_session(mode=args.mode, target=str(target.resolve()))
 
     try:
-        sandbox.prepare(target)
+        sandbox.prepare(target, seed=args.seed)
         run_log = simulator.run(target, mode=args.mode, run_log=run_log)
 
         import scorer

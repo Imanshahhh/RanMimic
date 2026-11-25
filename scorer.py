@@ -22,10 +22,13 @@ import entropy
 # ---------------------------------------------------------------------------
 WEIGHTS = {
     "rename_ratio": 20,      # proportion of files renamed with suspicious extension
-    "entropy_delta": 25,     # mean entropy increase across affected files
-    "chi_square_shift": 20,  # mean shift toward uniform distribution
+    "entropy_delta": 30,     # mean entropy increase across affected files
+    "chi_square_shift": 25,  # mean shift toward uniform distribution
     "ransom_note": 20,       # flat bonus - presence is a near-certain signal
-    "file_speed": 15,        # files/sec relative to a baseline
+    "file_speed": 5,         # files/sec relative to a baseline — down-weighted:
+                             # confounded by AES overhead making attack modes
+                             # SLOWER than benign in this simulation, so it
+                             # doesn't reliably discriminate at this scale
 }
 
 # Calibration constants - tuned against expected AES-256-CBC behavior.
@@ -41,6 +44,11 @@ RISK_BANDS = [
     (0, 29, "LOW"),
 ]
 
+def _risk_band(total: float) -> str:
+    for low, high, label in RISK_BANDS:
+        if low <= total <= high:
+            return label
+    return "UNKNOWN"
 
 @dataclass
 class ScoreBreakdown:
