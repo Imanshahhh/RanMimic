@@ -23,7 +23,7 @@ import logger as ranmimic_logger
 console = Console()
 
 DEFAULT_SANDBOX = Path("./sandbox").resolve()
-BLOCKED_HINTS = ["windows", "system32", "/etc", "/home", "c:\\users", "/root"]
+BLOCKED_HINTS = ["c:\\windows", "c:\\program files", "system32", "/etc", "/bin", "/usr", "/boot", "/sys", "/proc"]
 
 LEGAL_BANNER = """
 [bold red]RANMIMIC - RANSOMWARE BEHAVIOR SIMULATOR[/bold red]
