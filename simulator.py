@@ -148,13 +148,18 @@ def _encrypt_and_rename_file(filepath: Path, key: bytes, do_rename: bool) -> dic
 
 def _benign_touch_file(filepath: Path) -> dict:
     """
-    Rewrites the file with new random content of the SAME length and
-    extension - no encryption, no rename. This is what makes 'benign'
-    mode a real negative case for the scorer rather than a no-op.
+    Simulates ORDINARY file activity — appending content, minor edits —
+    NOT a full random overwrite (which is statistically indistinguishable
+    from encryption and was causing false-positive-level scores).
     """
     original_bytes = filepath.read_bytes()
-    noise = os.urandom(len(original_bytes))
-    filepath.write_bytes(noise)
+
+    # Simulate a realistic edit: append some plausible text/data rather
+    # than replacing the entire file with randomness.
+    appended = b"\n-- benign edit appended at simulation time --\n"
+    modified = original_bytes + appended
+
+    filepath.write_bytes(modified)
 
     return {
         "original": str(filepath),
@@ -162,7 +167,6 @@ def _benign_touch_file(filepath: Path) -> dict:
         "encrypted": False,
         "renamed": False,
     }
-
 
 # ---------------------------------------------------------------------------
 # Main entry point - called from main.py
