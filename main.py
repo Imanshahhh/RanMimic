@@ -17,6 +17,7 @@ from rich.panel import Panel
 import killswitch
 import sandbox
 import simulator
+import ioc_gen
 import logger as ranmimic_logger
 
 console = Console()
@@ -158,7 +159,22 @@ def main():
 
     try:
         sandbox.prepare(target)
-        simulator.run(target, mode=args.mode, run_log=run_log)
+        run_log = simulator.run(target, mode=args.mode, run_log=run_log)
+
+        import scorer
+        breakdown = scorer.score_session(
+            before_snapshots=run_log["before_snapshots"],
+            after_snapshots=run_log["after_snapshots"],
+            renamed_files=[r for r in run_log["results"] if r["renamed"]],
+            note_dropped=run_log["note_dropped"],
+            files_per_sec=run_log["files_per_sec"],
+            total_files=run_log["files_total"],
+        )
+        scorer.print_report(breakdown)
+
+        ioc_gen.generate_ioc_report(run_log, breakdown)
+        console.print(f"[dim]IOC report written to ./output/ioc_report.txt[/dim]")
+
     except KeyboardInterrupt:
         handle_abort(args)
     finally:
